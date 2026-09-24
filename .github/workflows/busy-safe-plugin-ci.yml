@@ -1,0 +1,83 @@
+name: Busy-safe plugin command CI
+
+on:
+  pull_request:
+    paths:
+      - "gateway/run_busy.py"
+      - "gateway/run_inbound.py"
+      - "hermes_cli/plugins.py"
+      - "hermes_cli/plugins_loader.py"
+      - "plugins/context_engine/__init__.py"
+      - "tests/gateway/test_plugin_busy_safe_commands.py"
+      - "contributors/emails/**"
+      - ".github/workflows/busy-safe-plugin-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: busy-safe-plugin-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify busy-safe plugin command contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.12.13"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install locked test environment
+        run: uv sync --locked --python 3.11 --extra all --extra dev
+
+      - name: Run affected behavior suites
+        run: |
+          .venv/bin/python -m pytest -o 'addopts=' -q \
+            tests/gateway/test_plugin_busy_safe_commands.py \
+            tests/gateway/test_unknown_command.py \
+            tests/gateway/test_command_bypass_active_session.py \
+            tests/gateway/test_slash_access_dispatch.py \
+            tests/gateway/test_run_cleanup_progress.py \
+            tests/gateway/test_session_env.py \
+            tests/hermes_cli/test_plugins.py \
+            tests/hermes_cli/test_plugin_ownership_ledger.py \
+            tests/plugins/test_context_engine_user_dir.py \
+            tests/agent/test_plugin_context_engine_init.py \
+            tests/agent/test_context_engine_host_contract.py
+
+      - name: Run focused static gates
+        run: |
+          .venv/bin/ruff check \
+            gateway/run_busy.py \
+            gateway/run_inbound.py \
+            hermes_cli/plugins.py \
+            hermes_cli/plugins_loader.py \
+            plugins/context_engine/__init__.py \
+            tests/gateway/test_plugin_busy_safe_commands.py
+          .venv/bin/python scripts/check_compat_pointers.py
+          .venv/bin/python scripts/check_profile_scope_patterns.py
+          .venv/bin/python scripts/audit_pr_attribution.py
+          .venv/bin/python -m compileall -q \
+            gateway/run_busy.py \
+            gateway/run_inbound.py \
+            hermes_cli/plugins.py \
+            hermes_cli/plugins_loader.py \
+            plugins/context_engine/__init__.py \
+            tests/gateway/test_plugin_busy_safe_commands.py
+          git diff --check "$(git merge-base origin/main HEAD)..HEAD"
